@@ -19,6 +19,13 @@
 #     the last price. In the practice event, higher-priced markets systematically
 #     displaced slightly downward over the next four hours; the shift is zero at
 #     the checkpoint and reaches 4% of the price at the horizon's end.
+#   * Flat windows: a window whose price never moved has zero empirical scale
+#     at every horizon, so its band would collapse to a spike on the last
+#     price. It falls back to the generic 0.0025 * sqrt(h) scale instead (the
+#     same fallback used for very short histories), narrowed as usual. No
+#     practice window is flat, so this changes no practice score; it guards
+#     the final's thin markets, which can sit at one price for hours and then
+#     jump on news.
 #
 # On the kit's six practice cases this scores a mean pinball loss of 0.272,
 # against the house baseline's published 0.363589 and this entry's previous
@@ -90,12 +97,18 @@ def window_rows(seg, horizon):
         diffs = [seg[i + 1] - seg[i] for i in range(m - 1)]
         keff = 1
     sigma = rms(diffs)
+    # A window that never moved carries no scale information of its own: the
+    # standardized changes and the RMS curve below are all zero, which would
+    # collapse the band to a spike on the last price. Such a market is quiet,
+    # not certain -- fall back to the generic scale (the same 0.0025 * sqrt(h)
+    # used for very short histories) so it still gets an honest band.
+    flat = sigma == 0.0
     sref = sigma if sigma > 0.0 else 1e-5
-    if diffs:
+    if flat or not diffs:
+        shape = list(Z)
+    else:
         ordered = sorted(d / sref for d in diffs)
         shape = [quantile(ordered, tau) for tau in QUANTILES]
-    else:
-        shape = list(Z)
     # empirical RMS of h-minute changes, per horizon
     curve = [None] * (horizon + 1)
     for h in range(1, horizon + 1):
@@ -104,7 +117,9 @@ def window_rows(seg, horizon):
     avail = [h for h in range(1, horizon + 1) if curve[h] is not None]
     rows = []
     for h in range(1, horizon + 1):
-        if avail:
+        if flat:
+            s = 0.0025 * math.sqrt(h)
+        elif avail:
             if curve[h] is not None:
                 s = curve[h]
             elif h < avail[0]:
